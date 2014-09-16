@@ -70,9 +70,9 @@ var PlayerController = function (canvasOffset, ticks){
   this.fire = makeFireStream();
 }
 
-var Projectile = function(initialPosition, velocityNormal, projectilesStream) {
+var Projectile = function(initialPosition, velocityNormal, projectilesStream, playerId) {
     function drawElement() {
-        var lineLength = 5;
+        var lineLength = 50;
         var line = new paper.Path({
             segments: [initialPosition, new paper.Point(initialPosition.add(velocityNormal.multiply(lineLength)))],
             strokeColor: 'black'
@@ -82,8 +82,8 @@ var Projectile = function(initialPosition, velocityNormal, projectilesStream) {
     }
 
     var element = drawElement()
-    var speed = 200
-    var maxLength = 100
+    var speed = 50
+    var maxLength = 500
     this.position = Game.ticks.map(function(timeDelta){return velocityNormal.multiply(timeDelta * 0.001 * speed)}).scan(
         {pos: initialPosition, len: 0},
         function(acc, velo) {
@@ -93,6 +93,10 @@ var Projectile = function(initialPosition, velocityNormal, projectilesStream) {
     var unsubscribe = this.position.onValue(function(v) {
         element.position = v.pos
         projectilesStream.push(element.position)
+
+        if( Game.localPlayer.id != playerId && Game.localPlayer.isCollide(element) )
+          Game.localPlayer.hit()
+
         if (v.len > maxLength) {
             unsubscribe()
             element.remove()
@@ -101,20 +105,22 @@ var Projectile = function(initialPosition, velocityNormal, projectilesStream) {
 }
 
 Game.drawPlayer = function (initialPosition, id, circleColor, captionColor) {
+    var hp = 100
+    var radius = 20
     var circle = new paper.Path.Circle({
        center: initialPosition,
-       radius: 7,
+       radius: radius,
        fillColor: circleColor
     });
 
     var line = new paper.Path({
-        segments: [initialPosition, new paper.Point(initialPosition.x + 7, initialPosition.y)],
+        segments: [initialPosition, new paper.Point(initialPosition.x + radius, initialPosition.y)],
         strokeColor: 'black'
     });
 
     var text = new paper.PointText({
-        point: [initialPosition.x, initialPosition.y - 12],
-        content: id,
+        point: [initialPosition.x, initialPosition.y - radius - 5],
+        content: id +', ' + hp,
         fillColor: captionColor,
         fontSize: 8
     });
@@ -123,6 +129,12 @@ Game.drawPlayer = function (initialPosition, id, circleColor, captionColor) {
     var textGroup = new paper.Group([text]);
     var group = new paper.Group([playerGroup, textGroup]);
     playerGroup.transformContent = false;
+
+    group.isCollide = function(otherPath){
+      var intersections = circle.getIntersections(otherPath);
+      return intersections.length > 0;
+    }
+
     return group;
   }
 
@@ -131,11 +143,11 @@ var RemoteController = function(playerCmdStream) {
     this.movements = playerCmdStream.filter(filterCmdBy("m"))
     this.leave = playerCmdStream.filter(filterCmdBy("l"))
     this.shoot = playerCmdStream.filter(filterCmdBy("f"))
-    playerCmdStream.onValue(function(v){console.log(v)})
+    playerCmdStream.onValue(function(v){console.log('cmd:',v)})
 }
 
 var RemotePlayer = function (id, remoteController, initialPosition, initialAngle, projectilesStream) {
-    var playerElement = Game.drawPlayer(initialPosition, id, "blue", "red")
+    var playerElement = Game.drawPlayer(initialPosition, id, "red", "blue")
     var ticksBetweenCmds = Game.sendCmdRate / Game.tickRate;
     var ticksBetweenCmdsReciprocal = 1 / ticksBetweenCmds;
     var movements = remoteController.movements.flatMapLatest(function(cmd) {
@@ -160,7 +172,7 @@ var RemotePlayer = function (id, remoteController, initialPosition, initialAngle
     function doFire (position, angle) {
         var vn = new paper.Point(0, 1)
         vn.angle = angle
-        new Projectile(position, vn, projectilesStream)
+        new Projectile(position, vn, projectilesStream, id)
     }
     var unsubscribeShoot = remoteController.shoot.onValue(function(cmd) { doFire(playerElement.children[0].position, cmd.a)})
 
@@ -176,7 +188,7 @@ var RemotePlayer = function (id, remoteController, initialPosition, initialAngle
 var LocalPlayer = function(id, controller, initialPosition, projectilesStream, upStream) {
   this.id = id;
 
-  var playerElement = Game.drawPlayer(initialPosition, id, "red", "green")
+  playerElement = Game.drawPlayer(initialPosition, id, "green", "blue")
 
   // TODO: modify and return the same accumulator instance, don't create new every time
   var state = Bacon.update(
@@ -208,7 +220,7 @@ var LocalPlayer = function(id, controller, initialPosition, projectilesStream, u
   function doFire (position, angle) {
     var vn = new paper.Point(0, 1)
     vn.angle = angle
-    new Projectile(position, vn, projectilesStream)
+    new Projectile(position, vn, projectilesStream, id)
   }
 
   //controller.fire.sample(400).onValue(function(v){console.log(v)})
@@ -229,8 +241,15 @@ var LocalPlayer = function(id, controller, initialPosition, projectilesStream, u
   this.hit = function(){
     playerElement.remove()
     unsubscribeState()
-    unsubscribeFire()
+    //unsubscribeFire()
     unsubscribeCmdsStream()
+    upStream.push({c:"l"});
+  }
+
+  this.isCollide = function(otherPath){
+    var isCollide = playerElement.isCollide(otherPath)
+    //console.log(isCollide)
+    return isCollide
   }
 
   state.onValue(function (p){ $('#text').text(p.angle + "  " + p.pos) })
